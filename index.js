@@ -1,6 +1,16 @@
 const { InstanceBase, Regex, runEntrypoint } = require('@companion-module/base')
 const UpgradeScripts = require('./upgrades')
 
+// Lightkey page/cue/cuelist names use underscores in place of spaces in OSC addresses
+const toOscName = (name) => String(name).trim().replace(/\s/g, '_')
+
+// Optional fade time argument: returns [] when blank or not a number so Lightkey uses the cue's own fade time
+const fadeArgs = (value, type = 'f') => {
+	const n = parseFloat(String(value ?? '').trim())
+	if (isNaN(n)) return []
+	return [{ type, value: type === 'i' ? Math.round(n) : n }]
+}
+
 class LightkeyInstance extends InstanceBase {
 	constructor(internal) {
 		super(internal)
@@ -69,19 +79,10 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					let pageName = await context.parseVariablesInString(action.options.pageName)
+					let pageName = toOscName(await context.parseVariablesInString(action.options.pageName))
+					let fadeTime = await context.parseVariablesInString(action.options.fadeTime ?? '')
 
-					let fadeTime = await context.parseVariablesInString(action.options.fadeTime.trim())
-
-					let args = []
-					args = [
-						{
-							type: 'f',
-							value: parseInt(fadeTime),
-						},
-					]
-
-					sendOscMessage('/live/' + pageName + '/select', args)
+					sendOscMessage('/live/' + pageName + '/select', fadeArgs(fadeTime))
 				},
 			},
 			triggerCue: {
@@ -132,29 +133,20 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					let fadeTime = await context.parseVariablesInString(action.options.fadeTime.trim())
+					let fadeTime = await context.parseVariablesInString(action.options.fadeTime ?? '')
 					let pageName
-					let args = []
-					args = [
-						{
-							type: 'f',
-							value: parseInt(fadeTime),
-						},
-					]
 
 					if (action.options.pageType == 'selected') {
 						pageName = 'selected'
 					} else if (action.options.pageType == 'all') {
 						pageName = '*'
 					} else {
-						pageName = await context.parseVariablesInString(action.options.pageName.trim())
-						pageName = pageName.replace(' ', '_')
+						pageName = toOscName(await context.parseVariablesInString(action.options.pageName))
 					}
 
-					let cueName = await context.parseVariablesInString(action.options.cueName)
-					cueName = cueName.replace(' ', '_')
+					let cueName = toOscName(await context.parseVariablesInString(action.options.cueName))
 
-					sendOscMessage('/live/' + pageName + '/cue/' + cueName + '/' + action.options.mode, args)
+					sendOscMessage('/live/' + pageName + '/cue/' + cueName + '/' + action.options.mode, fadeArgs(fadeTime))
 				},
 			},
 			setCueIntensity: {
@@ -197,14 +189,12 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					let intensity = await context.parseVariablesInString(action.options.intensity.trim())
-					let args = []
-					args = [
-						{
-							type: 'f',
-							value: intensity / 100,
-						},
-					]
+					let intensity = parseFloat(await context.parseVariablesInString(action.options.intensity))
+					if (isNaN(intensity)) {
+						this.log('warn', 'Set Cue Intensity: intensity is not a number')
+						return
+					}
+					let args = [{ type: 'f', value: intensity / 100 }]
 
 					let pageName
 
@@ -213,12 +203,10 @@ class LightkeyInstance extends InstanceBase {
 					} else if (action.options.pageType == 'all') {
 						pageName = '*'
 					} else {
-						pageName = await context.parseVariablesInString(action.options.pageName.trim())
-						pageName = pageName.replace(' ', '_')
+						pageName = toOscName(await context.parseVariablesInString(action.options.pageName))
 					}
 
-					let cueName = await context.parseVariablesInString(action.options.cueName.trim())
-					cueName = cueName.replace(' ', '_')
+					let cueName = toOscName(await context.parseVariablesInString(action.options.cueName))
 
 					sendOscMessage('/live/' + pageName + '/cue/' + cueName + '/intensity', args)
 				},
@@ -249,22 +237,14 @@ class LightkeyInstance extends InstanceBase {
 						id: 'fadeTime',
 						useVariables: true,
 						isVisible: (options) => {
-							options.mode == 'nextCue' || options.mode == 'previousCue'
+							return options.mode == 'nextCue' || options.mode == 'previousCue'
 						},
 					},
 				],
 				callback: async (action, context) => {
-					let fadeTime = await context.parseVariablesInString(action.options.fadeTime.trim())
 					if (action.options.mode == 'nextCue' || action.options.mode == 'previousCue') {
-						let args = []
-						args = [
-							{
-								type: 'i',
-								value: parseInt(fadeTime),
-							},
-						]
-
-						sendOscMessage('/live/' + action.options.mode, args)
+						let fadeTime = await context.parseVariablesInString(action.options.fadeTime ?? '')
+						sendOscMessage('/live/' + action.options.mode, fadeArgs(fadeTime))
 					} else {
 						sendOscMessage('/live/' + action.options.mode)
 					}
@@ -302,6 +282,7 @@ class LightkeyInstance extends InstanceBase {
 						type: 'dropdown',
 						label: 'Mode',
 						id: 'mode',
+						default: 'skip',
 						choices: [
 							{ id: 'skip', label: 'Skip' },
 							{ id: 'unskip', label: 'Unskip' },
@@ -354,7 +335,7 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action) => {
-					let presetPath = action.options.path.replace(/\s/g, '_')
+					let presetPath = action.options.path.trim().replace(/\s/g, '_')
 
 					sendOscMessage('/palette/' + presetPath + '/' + action.options.mode)
 				},
@@ -382,9 +363,9 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action) => {
-					let presetPath = action.path.replace(/\s/g, '_')
+					let presetPath = action.options.path.trim().replace(/\s/g, '_')
 
-					sendOscMessage('/palette/' + presetPath + '/' + action.mode)
+					sendOscMessage('/palette/' + presetPath + '/' + action.options.mode)
 				},
 			},
 			/***** OUTPUT CONTROL ACTIONS *****/
@@ -440,14 +421,12 @@ class LightkeyInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					let level = await context.parseVariablesInString(action.options.level.trim())
-					let args = []
-					args = [
-						{
-							type: 'f',
-							value: level / 100,
-						},
-					]
+					let level = parseFloat(await context.parseVariablesInString(action.options.level))
+					if (isNaN(level)) {
+						this.log('warn', 'Master Dimmer Level: level is not a number')
+						return
+					}
+					let args = [{ type: 'f', value: level / 100 }]
 
 					sendOscMessage('/output/master', args)
 				},
@@ -477,22 +456,18 @@ class LightkeyInstance extends InstanceBase {
 						min: 30,
 						max: 400,
 						isVisible: (options) => {
-							options.mode == 'setTempo'
+							return options.mode == 'tempo'
 						},
 					},
 				],
 				callback: async (action, context) => {
-					let bpm = await context.parseVariablesInString(action.options.bpm.trim())
 					if (action.options.mode == 'tempo') {
-						let args = []
-						args = [
-							{
-								type: 'i',
-								value: bpm,
-							},
-						]
-
-						sendOscMessage('/beat/' + action.options.mode, args)
+						let bpm = parseFloat(await context.parseVariablesInString(action.options.bpm ?? ''))
+						if (isNaN(bpm)) {
+							this.log('warn', 'Beat Control: BPM is not a number')
+							return
+						}
+						sendOscMessage('/beat/tempo', [{ type: 'f', value: bpm }])
 					} else {
 						sendOscMessage('/beat/' + action.options.mode)
 					}
@@ -527,7 +502,7 @@ class LightkeyInstance extends InstanceBase {
 							{ id: 's', label: 'string' },
 						],
 						isVisible: (options) => {
-							options.numOfValeus >= 1
+							return options.numOfValeus >= 1
 						},
 					},
 					{
@@ -535,7 +510,7 @@ class LightkeyInstance extends InstanceBase {
 						label: 'Value 1',
 						id: 'customValue1',
 						isVisible: (options) => {
-							options.numOfValeus >= 1
+							return options.numOfValeus >= 1
 						},
 					},
 					{
@@ -549,7 +524,7 @@ class LightkeyInstance extends InstanceBase {
 							{ id: 's', label: 'string' },
 						],
 						isVisible: (options) => {
-							options.numOfValeus >= 2
+							return options.numOfValeus >= 2
 						},
 					},
 					{
@@ -557,7 +532,7 @@ class LightkeyInstance extends InstanceBase {
 						label: 'Value 2',
 						id: 'customValue2',
 						isVisible: (options) => {
-							options.numOfValeus >= 2
+							return options.numOfValeus >= 2
 						},
 					},
 					{
@@ -571,7 +546,7 @@ class LightkeyInstance extends InstanceBase {
 							{ id: 's', label: 'string' },
 						],
 						isVisible: (options) => {
-							options.numOfValeus >= 3
+							return options.numOfValeus >= 3
 						},
 					},
 					{
@@ -579,7 +554,7 @@ class LightkeyInstance extends InstanceBase {
 						label: 'Value 3',
 						id: 'customValue3',
 						isVisible: (options) => {
-							options.numOfValeus >= 3
+							return options.numOfValeus >= 3
 						},
 					},
 				],
